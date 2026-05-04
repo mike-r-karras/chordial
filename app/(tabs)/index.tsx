@@ -1,98 +1,280 @@
+import React, { useEffect } from 'react';
+import { StyleSheet, TouchableOpacity, View, ActivityIndicator, Alert, Modal } from 'react-native';
 import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
+import Animated, { 
+  useSharedValue, 
+  useAnimatedStyle, 
+  withSpring, 
+  interpolate 
+} from 'react-native-reanimated';
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import { useAudioProcessor } from '@/hooks/use-audio-processor';
+import { BlackHoleBackground } from '@/components/black-hole-background';
 
 export default function HomeScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+  const { 
+    isRecording, 
+    isSearching,
+    metering, 
+    match, 
+    startSearchRecording, 
+    resetSearch,
+    permissionStatus 
+  } = useAudioProcessor();
+  
+  const scale = useSharedValue(1);
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
+  useEffect(() => {
+    // Pulse only when not actively searching/capturing and NO result is shown
+    if (isRecording || isSearching || !!match) {
+      scale.value = withSpring(1.1, { damping: 2, stiffness: 80 });
+      return;
+    }
+
+    // Map metering (typically -160 to 0) to a scale factor (1 to 1.4)
+    const normalizedMetering = Math.max(-60, metering);
+    const newScale = interpolate(
+      normalizedMetering,
+      [-60, 0],
+      [1, 1.4]
+    );
+    scale.value = withSpring(newScale, { damping: 10, stiffness: 100 });
+  }, [metering, scale, isRecording, isSearching, match]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  const handleStartSearch = async () => {
+    const found = await startSearchRecording();
+    if (found === false && !match) {
+      Alert.alert(
+        "Song Not Found",
+        "I'm sorry, we didn't find that song in our library.",
+        [{ text: "OK", onPress: resetSearch }]
+      );
+    }
+  };
+
+  const handleOpenChords = async () => {
+    if (!match) return;
+
+    try {
+      const fileUri = `${FileSystem.documentDirectory}${match.title.replace(/\s+/g, '_')}_chords.pdf`;
+      
+      // Since the API is a stub, we'll download a dummy PDF
+      const { uri } = await FileSystem.downloadAsync(
+        match.chordChartUrl,
+        fileUri
+      );
+
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri);
+      } else {
+        Alert.alert('Error', 'Sharing is not available on this device');
+      }
+    } catch (error) {
+      console.error('Failed to open chords', error);
+      Alert.alert('Error', 'Could not open chord chart');
+    }
+  };
+
+  if (permissionStatus === 'denied') {
+    return (
+      <ThemedView style={styles.container}>
+        <ThemedText type="subtitle">Microphone permission is required to use Chordial.</ThemedText>
       </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+    );
+  }
+
+  return (
+    <ThemedView style={styles.container}>
+      <BlackHoleBackground active={isRecording} />
+      <View style={styles.header}>
+        <ThemedText type="title">Chordial</ThemedText>
+      </View>
+
+      <View style={styles.centerContainer}>
+        <TouchableOpacity 
+          activeOpacity={0.8} 
+          onPress={handleStartSearch}
+          disabled={isRecording || isSearching || !!match}
+          style={styles.buttonWrapper}
+        >
+          <Animated.View style={[styles.pulseCircle, animatedStyle]}>
+            <View style={styles.innerCircle}>
+              <Image
+                source={require('@/assets/images/chordial_logo.png')}
+                style={styles.logo}
+                contentFit="contain"
+              />
+            </View>
+          </Animated.View>
+        </TouchableOpacity>
+
+        <View style={styles.infoContainer}>
+          {isRecording ? (
+            <>
+              <ActivityIndicator size="large" color="#007AFF" />
+              <ThemedText style={styles.statusText}>Capturing audio...</ThemedText>
+            </>
+          ) : isSearching ? (
+            <>
+              <ActivityIndicator size="large" color="#FF9500" />
+              <ThemedText style={styles.statusText}>Identifying song...</ThemedText>
+            </>
+          ) : (
+            <ThemedText style={styles.instructionText}>
+              Click to find chord charts for this song.
+            </ThemedText>
+          )}
+        </View>
+      </View>
+
+      <Modal
+        visible={!!match}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={resetSearch}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.resultContainer}>
+            <TouchableOpacity style={styles.closeButton} onPress={resetSearch}>
+              <Ionicons name="close" size={24} color="#666" />
+            </TouchableOpacity>
+
+            <ThemedText type="title" style={styles.foundTitle}>
+              Found: {match?.title}
+            </ThemedText>
+            <ThemedText style={styles.artistText}>by {match?.artist}</ThemedText>
+            
+            <TouchableOpacity style={styles.chordButton} onPress={handleOpenChords}>
+              <ThemedText style={styles.chordButtonText}>View Chord Chart (PDF)</ThemedText>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
+  container: {
+    flex: 1,
     alignItems: 'center',
-    gap: 8,
+    paddingHorizontal: 20,
+    paddingTop: 60,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  header: {
+    marginBottom: 40,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: '100%',
+  },
+  buttonWrapper: {
+    width: 240,
+    height: 240,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pulseCircle: {
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: 'rgba(0, 122, 255, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  innerCircle: {
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    backgroundColor: '#fff',
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  logo: {
+    width: '80%',
+    height: '80%',
+  },
+  infoContainer: {
+    marginTop: 40,
+    alignItems: 'center',
+    height: 80,
+  },
+  statusText: {
+    marginTop: 10,
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  instructionText: {
+    fontSize: 18,
+    textAlign: 'center',
+    color: '#666',
+  },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+  },
+  resultContainer: {
+    width: '100%',
+    padding: 30,
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 25,
+    borderTopRightRadius: 25,
+    alignItems: 'center',
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+  },
+  closeButton: {
     position: 'absolute',
+    right: 20,
+    top: 20,
+    padding: 5,
+  },
+  foundTitle: {
+    marginTop: 20,
+    fontSize: 28,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    color: '#000',
+  },
+  artistText: {
+    fontSize: 20,
+    color: '#333',
+    marginTop: 5,
+    marginBottom: 30,
+    fontWeight: '500',
+  },
+  chordButton: {
+    backgroundColor: '#007AFF',
+    paddingVertical: 15,
+    paddingHorizontal: 40,
+    borderRadius: 30,
+    width: '100%',
+    alignItems: 'center',
+  },
+  chordButtonText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
   },
 });
