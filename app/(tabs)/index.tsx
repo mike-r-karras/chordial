@@ -15,6 +15,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useAudioProcessor } from '@/hooks/use-audio-processor';
 import { BlackHoleBackground } from '@/components/black-hole-background';
+import { ChordialParticleWord } from '@/components/chordial-particle-word';
 
 export default function HomeScreen() {
   const { 
@@ -96,7 +97,7 @@ export default function HomeScreen() {
     <ThemedView style={styles.container}>
       <BlackHoleBackground active={isRecording} />
       <View style={styles.header}>
-        <ThemedText type="title">Chordial</ThemedText>
+        <ChordialParticleWord />
       </View>
 
       <View style={styles.centerContainer}>
