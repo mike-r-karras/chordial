@@ -1,91 +1,70 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { Audio } from 'expo-av';
-import * as FileSystem from 'expo-file-system';
 import { fingerprintAudio, identifySong, SongMatch } from '@/services/api';
+import { 
+  useAudioRecorder, 
+  RecordingPresets, 
+  AudioModule, 
+  RecordingOptions,
+  IOSOutputFormat,
+  AudioQuality,
+  useAudioRecorderState
+} from 'expo-audio';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export function useAudioProcessor() {
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
-  const [metering, setMetering] = useState(-160); // Default low value in dB
-  const [permissionResponse, requestPermission] = Audio.usePermissions();
   const [match, setMatch] = useState<SongMatch | null>(null);
-  
-  const ambientRecordingRef = useRef<Audio.Recording | null>(null);
   const isTransitioningRef = useRef(false);
+
+  // WAV Recording Options for Fingerprinting
+  const WAV_RECORDING_OPTIONS: RecordingOptions = {
+    isMeteringEnabled: true,
+    extension: '.wav',
+    sampleRate: 22050,
+    numberOfChannels: 1,
+    bitRate: 128000,
+    android: {
+      extension: '.m4a',
+      outputFormat: 'mpeg4',
+      audioEncoder: 'aac',
+      audioSource: 'unprocessed',
+    },
+    ios: {
+      outputFormat: IOSOutputFormat.LINEARPCM,
+      audioQuality: AudioQuality.HIGH,
+      linearPCMBitDepth: 16,
+      linearPCMIsBigEndian: false,
+      linearPCMIsFloat: false,
+    },
+    web: {
+      mimeType: 'audio/wav',
+      bitsPerSecond: 128000,
+    },
+  };
+
+  const recorder = useAudioRecorder(WAV_RECORDING_OPTIONS);
+  const recorderState = useAudioRecorderState(recorder, 100);
 
   // Initialize Audio Session
   useEffect(() => {
     async function setupAudio() {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
+      await AudioModule.setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
       });
     }
     setupAudio();
   }, []);
 
-  const stopAmbientMonitoring = useCallback(async () => {
-    if (ambientRecordingRef.current) {
-      try {
-        const status = await ambientRecordingRef.current.getStatusAsync();
-        if (status.canRecord || status.isRecording) {
-          await ambientRecordingRef.current.stopAndUnloadAsync();
-        }
-      } catch (e) {
-        console.log('[Processor] Ambient stop error (likely already stopped):', e);
-      } finally {
-        ambientRecordingRef.current = null;
-      }
-    }
-  }, []);
-
-  // Ambient Monitoring for Pulsing
-  const startAmbientMonitoring = useCallback(async () => {
-    if (isTransitioningRef.current || isRecording || isSearching || !!match) return;
-    
-    const status = await Audio.getPermissionsAsync();
-    if (status.status !== 'granted') return;
-
-    // Ensure previous is gone
-    await stopAmbientMonitoring();
-
-    try {
-      console.log('[Processor] Starting ambient monitoring...');
-      const { recording: newRecording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.LOW_QUALITY,
-        (status) => {
-          if (status.metering !== undefined) {
-            setMetering(status.metering);
-          }
-        },
-        100 // Metering interval in ms
-      );
-      ambientRecordingRef.current = newRecording;
-    } catch (err) {
-      console.error('[Processor] Failed to start ambient monitoring', err);
-    }
-  }, [isRecording, isSearching, match, stopAmbientMonitoring]);
-
   useEffect(() => {
     async function initPermissions() {
-      const { status } = await Audio.getPermissionsAsync();
-      if (status !== 'granted') {
-        await requestPermission();
+      const status = await AudioModule.getRecordingPermissionsAsync();
+      if (status.status !== 'granted') {
+        await AudioModule.requestRecordingPermissionsAsync();
       }
     }
     initPermissions();
-  }, [requestPermission]);
-
-  useEffect(() => {
-    // Only start ambient if we aren't busy and don't have a result
-    if (permissionResponse?.status === 'granted' && !isRecording && !isSearching && !match) {
-      startAmbientMonitoring();
-    }
-    return () => {
-      stopAmbientMonitoring();
-    };
-  }, [permissionResponse, isRecording, isSearching, match, startAmbientMonitoring, stopAmbientMonitoring]);
+  }, []);
 
   const startSearchRecording = async () => {
     if (isRecording || isSearching || isTransitioningRef.current) return;
@@ -96,75 +75,56 @@ export function useAudioProcessor() {
     setMatch(null);
 
     try {
-      // 1. Stop ambient cleanly
-      await stopAmbientMonitoring();
-
-      // 2. Start real recording
       console.log('[Processor] Starting search recording...');
-      const { recording: newRecording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-      setRecording(newRecording);
+      
+      // prepareToRecordAsync might be needed depending on implementation details, 
+      // but useAudioRecorder usually handles it. Explicitly calling just in case.
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      
       isTransitioningRef.current = false;
 
-      const fingerprints: string[] = [];
-
       return new Promise<boolean>((resolve) => {
-        // Logic for 5 bites (10s each, offset by 1s)
-        for (let i = 0; i < 5; i++) {
-          setTimeout(async () => {
-            console.log(`[Processor] Capturing bite ${i + 1}...`);
-            const fp = await fingerprintAudio(newRecording.getURI() || 'temp_uri');
-            fingerprints.push(fp);
+        // Record for 10 seconds to get enough data for a good fingerprint
+        setTimeout(async () => {
+          try {
+            console.log('[Processor] Capturing audio for analysis...');
             
-            if (fingerprints.length === 5) {
+            const status = recorder.getStatus();
+            console.log(`[Processor] Final recording status: duration=${status.durationMillis}ms, metering=${status.metering}`);
+            
+            await recorder.stop();
+            const uri = recorder.uri;
+            
+            if (uri) {
               setIsSearching(true);
-              setIsRecording(false);
-              const result = await identifySong(fingerprints);
-              
-              // Cleanup recording before resolving
-              await stopRealRecording(newRecording);
+              const hashes = await fingerprintAudio(uri);
+              const result = await identifySong(hashes);
               
               setMatch(result);
               setIsSearching(false);
+              setIsRecording(false);
               resolve(!!result);
+            } else {
+              console.warn('[Processor] No URI found for recording');
+              setIsRecording(false);
+              resolve(false);
             }
-          }, (10 + i) * 1000);
-        }
-
-        // Safety timeout
-        setTimeout(async () => {
-          if (fingerprints.length < 5) {
-            await stopRealRecording(newRecording);
+          } catch (e) {
+            console.error('[Processor] Error processing recording:', e);
+            setIsRecording(false);
             resolve(false);
+          } finally {
+            // No explicit cleanup needed for recorder as useAudioRecorder handles it
           }
-        }, 16000);
+        }, 10000);
       });
 
     } catch (err) {
       console.error('[Processor] Failed to start search recording', err);
       setIsRecording(false);
       isTransitioningRef.current = false;
-      startAmbientMonitoring();
       return false;
-    }
-  };
-
-  const stopRealRecording = async (recObj: Audio.Recording | null) => {
-    const target = recObj || recording;
-    if (!target) return;
-    
-    try {
-      const status = await target.getStatusAsync();
-      if (status.canRecord || status.isRecording) {
-        await target.stopAndUnloadAsync();
-      }
-    } catch (err) {
-      console.log('[Processor] Real recording stop error:', err);
-    } finally {
-      if (!recObj || recObj === recording) {
-        setRecording(null);
-      }
     }
   };
 
@@ -172,17 +132,15 @@ export function useAudioProcessor() {
     setMatch(null);
     setIsSearching(false);
     setIsRecording(false);
-    // Explicitly trigger ambient restart
-    startAmbientMonitoring();
-  }, [startAmbientMonitoring]);
+  }, []);
 
   return {
     isRecording,
     isSearching,
-    metering,
+    metering: recorderState.metering ?? -160,
     match,
     startSearchRecording,
     resetSearch,
-    permissionStatus: permissionResponse?.status,
+    permissionStatus: 'granted', // Simplified for now as we check on init
   };
 }
