@@ -96,7 +96,7 @@ export default function HomeScreen() {
     <ThemedView style={styles.container}>
       <BlackHoleBackground active={isRecording} />
       <View style={styles.header}>
-        <ThemedText type="title">Chordial</ThemedText>
+        <ThemedText type="title">CHORDIAL</ThemedText>
       </View>
 
       <View style={styles.centerContainer}>
