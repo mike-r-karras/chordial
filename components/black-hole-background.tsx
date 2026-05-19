@@ -16,7 +16,7 @@ const { width, height } = Dimensions.get('window');
 const CENTER_X = width / 2;
 const CENTER_Y = height / 2;
 const BUTTON_RADIUS = 90;
-const DOT_COUNT = 30;
+const NOTE_COUNT = 30;
 const RING_COUNT = 15;
 
 const SOLARIZED_COLORS = [
@@ -24,15 +24,19 @@ const SOLARIZED_COLORS = [
   '#6c71c4', '#268bd2', '#2aa198', '#859900',
 ];
 
-interface DotProps {
+const NOTE_SYMBOLS = ['♩', '♪', '♫', '♬'];
+
+interface NoteProps {
   id: number;
   ringDistortions: Animated.SharedValue<number>[];
   ringAngles: Animated.SharedValue<number>[];
 }
 
-const Dot = ({ id, ringDistortions, ringAngles }: DotProps) => {
+const Note = ({ id, ringDistortions, ringAngles }: NoteProps) => {
   const progress = useSharedValue(0);
   const color = useMemo(() => SOLARIZED_COLORS[id % SOLARIZED_COLORS.length], [id]);
+  const noteSymbol = useMemo(() => NOTE_SYMBOLS[Math.floor(Math.random() * NOTE_SYMBOLS.length)], []);
+  const rotation = useMemo(() => (Math.random() * 60 - 30), []);
   
   const startPos = useMemo(() => {
     const side = Math.floor(Math.random() * 4);
@@ -91,19 +95,22 @@ const Dot = ({ id, ringDistortions, ringAngles }: DotProps) => {
 
     return {
       position: 'absolute',
-      left: x,
-      top: y,
-      width: 6,
-      height: 6,
-      borderRadius: 3,
-      backgroundColor: color,
+      left: x - 10, // Center the text roughly
+      top: y - 10,
       opacity,
-      transform: [{ scale: interpolate(progress.value, [0, 0.8, 1], [1, 1.5, 0]) }],
+      transform: [
+        { scale: interpolate(progress.value, [0, 0.8, 1], [1, 1.5, 0]) },
+        { rotate: `${rotation}deg` }
+      ],
       zIndex: 2,
     };
   });
 
-  return <Animated.View style={animatedStyle} />;
+  return (
+    <Animated.Text style={[animatedStyle, { color, fontSize: 20, fontWeight: 'bold' }]}>
+      {noteSymbol}
+    </Animated.Text>
+  );
 };
 
 const Ring = ({ index, distortion, angle }: { 
@@ -158,9 +165,9 @@ export const BlackHoleBackground = ({ active }: { active: boolean }) => {
           angle={ringAngles[i]}
         />
       ))}
-      {Array.from({ length: DOT_COUNT }).map((_, i) => (
-        <Dot 
-          key={`dot-${i}`} 
+      {Array.from({ length: NOTE_COUNT }).map((_, i) => (
+        <Note 
+          key={`note-${i}`} 
           id={i} 
           ringDistortions={ringDistortions} 
           ringAngles={ringAngles}
