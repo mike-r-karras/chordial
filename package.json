@@ -52,5 +52,9 @@
     "typescript": "~5.9.2"
   },
   "private": true,
-  "homepage": "https://mike-r-karras.github.io/chordial"
+  "expo": {
+    "experiments": {
+      "baseUrl": "/chordial"
+    }
+  }
 }
