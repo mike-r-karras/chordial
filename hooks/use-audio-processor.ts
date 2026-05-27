@@ -1,14 +1,18 @@
-import { fingerprintAudio, identifySong, SongMatch } from '@/services/api';
-import { 
-  useAudioRecorder, 
-  RecordingPresets, 
-  AudioModule, 
+import { identifySongFromAudio, SongMatch } from '@/services/api';
+import {
+  useAudioRecorder,
+  AudioModule,
   RecordingOptions,
   IOSOutputFormat,
   AudioQuality,
-  useAudioRecorderState
+  useAudioRecorderState,
 } from 'expo-audio';
 import { useCallback, useEffect, useRef, useState } from 'react';
+
+const WEB_MIME =
+  typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/mp4')
+    ? 'audio/mp4'
+    : 'audio/webm;codecs=opus';
 
 export function useAudioProcessor() {
   const [isRecording, setIsRecording] = useState(false);
@@ -16,33 +20,31 @@ export function useAudioProcessor() {
   const [match, setMatch] = useState<SongMatch | null>(null);
   const isTransitioningRef = useRef(false);
 
-  // WAV Recording Options for Fingerprinting
-  const WAV_RECORDING_OPTIONS: RecordingOptions = {
+  const AAC_RECORDING_OPTIONS: RecordingOptions = {
     isMeteringEnabled: true,
-    extension: '.wav',
-    sampleRate: 22050,
+    extension: '.m4a',
+    sampleRate: 44100,
     numberOfChannels: 1,
-    bitRate: 128000,
+    bitRate: 96000,
     android: {
       extension: '.m4a',
       outputFormat: 'mpeg4',
       audioEncoder: 'aac',
       audioSource: 'unprocessed',
+      sampleRate: 44100,
     },
     ios: {
-      outputFormat: IOSOutputFormat.LINEARPCM,
-      audioQuality: AudioQuality.HIGH,
-      linearPCMBitDepth: 16,
-      linearPCMIsBigEndian: false,
-      linearPCMIsFloat: false,
+      outputFormat: IOSOutputFormat.MPEG4AAC,
+      audioQuality: AudioQuality.MEDIUM,
+      sampleRate: 44100,
     },
     web: {
-      mimeType: 'audio/wav',
-      bitsPerSecond: 128000,
+      mimeType: WEB_MIME,
+      bitsPerSecond: 96000,
     },
   };
 
-  const recorder = useAudioRecorder(WAV_RECORDING_OPTIONS);
+  const recorder = useAudioRecorder(AAC_RECORDING_OPTIONS);
   const recorderState = useAudioRecorderState(recorder, 100);
 
   // Initialize Audio Session
@@ -98,9 +100,8 @@ export function useAudioProcessor() {
             
             if (uri) {
               setIsSearching(true);
-              const hashes = await fingerprintAudio(uri);
-              const result = await identifySong(hashes);
-              
+              const result = await identifySongFromAudio(uri);
+
               setMatch(result);
               setIsSearching(false);
               setIsRecording(false);
