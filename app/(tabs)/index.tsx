@@ -1,20 +1,20 @@
-import React, { useEffect, useState } from 'react';
-import { StyleSheet, TouchableOpacity, View, ActivityIndicator, Alert, Modal, Platform } from 'react-native';
-import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import * as WebBrowser from 'expo-web-browser';
-import Animated, { 
-  useSharedValue, 
-  useAnimatedStyle, 
-  withSpring, 
-  interpolate 
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, Modal, Platform, StyleSheet, TouchableOpacity, View } from 'react-native';
+import Animated, {
+  interpolate,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring
 } from 'react-native-reanimated';
 
+import { BlackHoleBackground } from '@/components/black-hole-background';
+import { ChordialParticleWord } from '@/components/chordial-particle-word';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useAudioProcessor } from '@/hooks/use-audio-processor';
-import { BlackHoleBackground } from '@/components/black-hole-background';
-import { ChordialParticleWord } from '@/components/chordial-particle-word';
 import sjucSongs from '@/sjuc_songs.json';
 
 // The JSON file is a flat map: song title -> SJUC chord-chart PDF URL.
