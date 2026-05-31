@@ -1,9 +1,8 @@
-import React, { useEffect } from 'react';
-import { StyleSheet, TouchableOpacity, View, ActivityIndicator, Alert, Modal } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { StyleSheet, TouchableOpacity, View, ActivityIndicator, Alert, Modal, Platform } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import * as Sharing from 'expo-sharing';
-import * as FileSystem from 'expo-file-system';
+import * as WebBrowser from 'expo-web-browser';
 import Animated, { 
   useSharedValue, 
   useAnimatedStyle, 
@@ -16,6 +15,24 @@ import { ThemedView } from '@/components/themed-view';
 import { useAudioProcessor } from '@/hooks/use-audio-processor';
 import { BlackHoleBackground } from '@/components/black-hole-background';
 import { ChordialParticleWord } from '@/components/chordial-particle-word';
+import sjucSongs from '@/sjuc_songs.json';
+
+// The JSON file is a flat map: song title -> SJUC chord-chart PDF URL.
+// Cast once so TypeScript knows what we're working with.
+const songs = sjucSongs as Record<string, string>;
+
+// Look up a song title in the SJUC library. Tries an exact match first,
+// then falls back to a case- and whitespace-insensitive match in case the
+// backend returns a title with slightly different formatting.
+function getChordChartUrl(title: string): string | null {
+  if (songs[title]) return songs[title];
+
+  const normalized = title.trim().toLowerCase();
+  const hit = Object.keys(songs).find(
+    (key) => key.trim().toLowerCase() === normalized,
+  );
+  return hit ? songs[hit] : null;
+}
 
 export default function HomeScreen() {
   const { 
@@ -29,6 +46,10 @@ export default function HomeScreen() {
   } = useAudioProcessor();
   
   const scale = useSharedValue(1);
+
+  // Holds the PDF URL for the in-app viewer modal. Null = viewer closed.
+  // We only ever set this on web; on native we open expo-web-browser instead.
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
 
   useEffect(() => {
     // Pulse only when not actively searching/capturing and NO result is shown
@@ -65,23 +86,25 @@ export default function HomeScreen() {
   const handleOpenChords = async () => {
     if (!match) return;
 
-    try {
-      const fileUri = `${FileSystem.documentDirectory}${match.title.replace(/\s+/g, '_')}_chords.pdf`;
-      
-      // Since the API is a stub, we'll download a dummy PDF
-      const { uri } = await FileSystem.downloadAsync(
-        match.chordChartUrl,
-        fileUri
-      );
+    const url = getChordChartUrl(match.title);
 
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri);
-      } else {
-        Alert.alert('Error', 'Sharing is not available on this device');
-      }
-    } catch (error) {
-      console.error('Failed to open chords', error);
-      Alert.alert('Error', 'Could not open chord chart');
+    if (!url) {
+      Alert.alert(
+        'Chord chart not available',
+        `We couldn't find a chord chart for "${match.title}" in the SJUC library.`,
+      );
+      return;
+    }
+
+    if (Platform.OS === 'web') {
+      // On web, set state so our <iframe> modal opens and embeds the PDF.
+      setPdfUrl(url);
+    } else {
+      // On iOS / Android, open the URL in the in-app system browser.
+      // (Showing PDFs truly inside a RN Modal requires extra libraries
+      // like react-native-webview; this keeps the user in our app
+      // without adding new dependencies.)
+      await WebBrowser.openBrowserAsync(url);
     }
   };
 
@@ -160,6 +183,43 @@ export default function HomeScreen() {
           </View>
         </View>
       </Modal>
+
+      {/*
+        PDF viewer modal. Only rendered on web.
+        React Native Web lets us drop a raw <iframe> into the tree, which the
+        browser renders as a normal HTML iframe pointing at the PDF URL.
+        On iOS/Android this entire block is skipped because pdfUrl is never set.
+      */}
+      {Platform.OS === 'web' && (
+        <Modal
+          visible={!!pdfUrl}
+          animationType="slide"
+          onRequestClose={() => setPdfUrl(null)}
+        >
+          <View style={styles.pdfModalContainer}>
+            <View style={styles.pdfHeader}>
+              <ThemedText style={styles.pdfHeaderTitle} numberOfLines={1}>
+                {match?.title ?? 'Chord chart'}
+              </ThemedText>
+              <TouchableOpacity
+                style={styles.pdfCloseButton}
+                onPress={() => setPdfUrl(null)}
+                accessibilityLabel="Close chord chart"
+              >
+                <Ionicons name="close" size={28} color="#333" />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.pdfFrameWrapper}>
+              {/* @ts-expect-error iframe is a DOM element; this block only runs on web */}
+              <iframe
+                src={pdfUrl ?? ''}
+                title="Chord chart"
+                style={{ border: 'none', width: '100%', height: '100%' }}
+              />
+            </View>
+          </View>
+        </Modal>
+      )}
     </ThemedView>
   );
 }
@@ -277,5 +337,33 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 18,
     fontWeight: 'bold',
+  },
+  pdfModalContainer: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  pdfHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#ddd',
+  },
+  pdfHeaderTitle: {
+    flex: 1,
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#000',
+    marginRight: 12,
+  },
+  pdfCloseButton: {
+    padding: 4,
+  },
+  pdfFrameWrapper: {
+    flex: 1,
+    backgroundColor: '#f4f4f4',
   },
 });
