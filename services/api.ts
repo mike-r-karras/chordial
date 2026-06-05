@@ -7,7 +7,8 @@ export interface SongMatch {
   chordChartUrl: string;
 }
 
-const FRAGMENTS_URL = 'https://chordial-api.mike-r-karras.workers.dev/fragments';
+// const FRAGMENTS_URL = 'https://chordial-api-616025745588.us-west1.run.app/fragments';
+const FRAGMENTS_URL = 'https://chordial-fingerprint-api-616025745588.us-west1.run.app/fragments';
 const AUTH_TOKEN = '5d3c8f8b6b9f4f0e9f8f3d8c7a1b2e4f6c9d0a8b7e3f1c2d4a5b6c7d8e9f0a1';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -20,46 +21,71 @@ const AUTH_TOKEN = '5d3c8f8b6b9f4f0e9f8f3d8c7a1b2e4f6c9d0a8b7e3f1c2d4a5b6c7d8e9f
 //   • A title NOT in sjuc_songs.json          → "Chord chart not available" alert
 //   • Set MOCK_MATCH = null                   → "Song Not Found" alert
 // ─────────────────────────────────────────────────────────────────────────────
-const USE_MOCK = true;
+const USE_MOCK = false;
 const MOCK_MATCH: SongMatch | null = {
   title: 'Hey Jude',
   artist: 'The Beatles',
   chordChartUrl: '', // unused — URL is now sourced from sjuc_songs.json
 };
 
+async function cleanupAudio(uri: string) {
+  if (Platform.OS === 'web') {
+    try {
+      URL.revokeObjectURL(uri);
+    } catch (e) {
+      console.warn('[API] Failed to revoke object URL:', e);
+    }
+  } else {
+    try {
+      await FileSystem.deleteAsync(uri, { idempotent: true });
+    } catch (e) {
+      console.warn('[API] Failed to delete audio file:', e);
+    }
+  }
+}
+
+async function uploadAudio(uri: string): Promise<Response> {
+  const headers: HeadersInit = {
+    'Authorization': `Bearer ${AUTH_TOKEN}`,
+  };
+
+  if (Platform.OS === 'web') {
+    const originalBlob = await fetch(uri).then((r) => r.blob());
+    const audioBlob = new Blob([originalBlob], { type: 'audio/m4a' });
+    
+    return fetch(FRAGMENTS_URL, {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'Content-Type': 'audio/m4a',
+      },
+      body: audioBlob,
+    });
+  }
+
+  const form = new FormData();
+  form.append('audio', {
+    uri,
+    name: 'capture.m4a',
+    type: 'audio/m4a',
+  } as any);
+
+  return fetch(FRAGMENTS_URL, {
+    method: 'POST',
+    headers,
+    body: form,
+  });
+}
+
 export async function identifySongFromAudio(uri: string): Promise<SongMatch | null> {
   if (USE_MOCK) {
-    // Pretend we called the server: tiny delay so the "Identifying song..."
-    // spinner is briefly visible, then return the mock result.
     await new Promise((resolve) => setTimeout(resolve, 600));
-
-    // Clean up the recorded file, same as the real path does in `finally`.
-    if (Platform.OS === 'web') {
-      try { URL.revokeObjectURL(uri); } catch {}
-    } else {
-      await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
-    }
+    await cleanupAudio(uri);
     return MOCK_MATCH;
   }
 
   try {
-    const form = new FormData();
-    if (Platform.OS === 'web') {
-      const blob = await fetch(uri).then((r) => r.blob());
-      form.append('audio', blob, 'capture.m4a');
-    } else {
-      form.append('audio', {
-        uri,
-        name: 'capture.m4a',
-        type: 'audio/m4a',
-      } as any);
-    }
-
-    const response = await fetch(FRAGMENTS_URL, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
-      body: form,
-    });
+    const response = await uploadAudio(uri);
 
     if (!response.ok) {
       console.warn(`[API] /fragments returned ${response.status}`);
@@ -67,22 +93,30 @@ export async function identifySongFromAudio(uri: string): Promise<SongMatch | nu
     }
 
     const result = await response.json();
-    if (result?.match) {
+    console.log('[API] /fragments response:', result);
+
+    const results = result.results || [];
+    if (result.success && results.length > 0) {
+      // Pick highest confidence, or the first match if confidences are equal
+      const topResult = results.reduce((best: any, current: any) =>
+        current.confidence > best.confidence ? current : best
+      );
+      
+      console.log('[API] topResult:', topResult);
+
       return {
-        title: result.match.title,
-        artist: result.match.artist,
-        chordChartUrl: result.match.chordChartUrl,
+        title: topResult.song.name,
+        artist: topResult.song.artist,
+        // Priority: specific result URL -> top-level match URL -> empty
+        chordChartUrl: topResult.song.chordChartUrl || result.match?.chordChartUrl || '',
       };
     }
+
     return null;
   } catch (e) {
     console.error('[API] /fragments request failed:', e);
     return null;
   } finally {
-    if (Platform.OS === 'web') {
-      try { URL.revokeObjectURL(uri); } catch {}
-    } else {
-      await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
-    }
+    await cleanupAudio(uri);
   }
 }

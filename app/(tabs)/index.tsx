@@ -86,7 +86,8 @@ export default function HomeScreen() {
   const handleOpenChords = async () => {
     if (!match) return;
 
-    const url = getChordChartUrl(match.title);
+    // Prefer the URL provided by the API, fall back to local lookup
+    const url = match.chordChartUrl || getChordChartUrl(match.title);
 
     if (!url) {
       Alert.alert(
@@ -98,13 +99,10 @@ export default function HomeScreen() {
 
     if (Platform.OS === 'web') {
       // On web, set state so our <iframe> modal opens and embeds the PDF.
-      setPdfUrl(url);
+      setPdfUrl("https://chordial-fingerprint-api-616025745588.us-west1.run.app/pdf-proxy?url=" + encodeURIComponent(url));
     } else {
       // On iOS / Android, open the URL in the in-app system browser.
-      // (Showing PDFs truly inside a RN Modal requires extra libraries
-      // like react-native-webview; this keeps the user in our app
-      // without adding new dependencies.)
-      await WebBrowser.openBrowserAsync(url);
+      await WebBrowser.openBrowserAsync("https://chordial-fingerprint-api-616025745588.us-west1.run.app/pdf-proxy?url=" + encodeURIComponent(url));
     }
   };
 
