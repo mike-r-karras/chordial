@@ -45,21 +45,22 @@ async function cleanupAudio(uri: string) {
 }
 
 async function uploadAudio(uri: string): Promise<Response> {
-  const headers: HeadersInit = {
+  const commonHeaders: HeadersInit = {
     'Authorization': `Bearer ${AUTH_TOKEN}`,
   };
 
   if (Platform.OS === 'web') {
     const originalBlob = await fetch(uri).then((r) => r.blob());
-    const audioBlob = new Blob([originalBlob], { type: 'audio/m4a' });
-    
+    // Use the original blob's type for the Content-Type header
+    const contentType = originalBlob.type || 'audio/m4a'; 
+
     return fetch(FRAGMENTS_URL, {
       method: 'POST',
       headers: {
-        ...headers,
-        'Content-Type': 'audio/m4a',
+        ...commonHeaders,
+        'Content-Type': contentType,
       },
-      body: audioBlob,
+      body: originalBlob,
     });
   }
 
@@ -72,7 +73,7 @@ async function uploadAudio(uri: string): Promise<Response> {
 
   return fetch(FRAGMENTS_URL, {
     method: 'POST',
-    headers,
+    headers: commonHeaders,
     body: form,
   });
 }
