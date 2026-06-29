@@ -50,10 +50,11 @@ export default function HomeScreen() {
   // Holds the PDF URL for the in-app viewer modal. Null = viewer closed.
   // We only ever set this on web; on native we open expo-web-browser instead.
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [showNoMatchModal, setShowNoMatchModal] = useState(false);
 
   useEffect(() => {
     // Pulse only when not actively searching/capturing and NO result is shown
-    if (isRecording || isSearching || !!match) {
+    if (isRecording || isSearching || !!match || showNoMatchModal) {
       scale.value = withSpring(1.1, { damping: 2, stiffness: 80 });
       return;
     }
@@ -66,20 +67,22 @@ export default function HomeScreen() {
       [1, 1.4]
     );
     scale.value = withSpring(newScale, { damping: 10, stiffness: 100 });
-  }, [metering, scale, isRecording, isSearching, match]);
+  }, [metering, scale, isRecording, isSearching, match, showNoMatchModal]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
   }));
 
+  const handleReset = () => {
+    resetSearch();
+    setShowNoMatchModal(false);
+  };
+
   const handleStartSearch = async () => {
+    setShowNoMatchModal(false);
     const found = await startSearchRecording();
     if (found === false && !match) {
-      Alert.alert(
-        "Song Not Found",
-        "I'm sorry, we didn't find that song in our library.",
-        [{ text: "OK", onPress: resetSearch }]
-      );
+      setShowNoMatchModal(true);
     }
   };
 
@@ -90,6 +93,7 @@ export default function HomeScreen() {
     const url = match.chordChartUrl || getChordChartUrl(match.title);
 
     if (!url) {
+      // This case is now handled visually in the modal, but kept as a safeguard
       Alert.alert(
         'Chord chart not available',
         `We couldn't find a chord chart for "${match.title}" in the SJUC library.`,
@@ -114,6 +118,8 @@ export default function HomeScreen() {
     );
   }
 
+  const chordChartUrl = match ? (match.chordChartUrl || getChordChartUrl(match.title)) : null;
+
   return (
     <ThemedView style={styles.container}>
       <BlackHoleBackground active={isRecording} />
@@ -125,7 +131,7 @@ export default function HomeScreen() {
         <TouchableOpacity 
           activeOpacity={0.8} 
           onPress={handleStartSearch}
-          disabled={isRecording || isSearching || !!match}
+          disabled={isRecording || isSearching || !!match || showNoMatchModal}
           style={styles.buttonWrapper}
         >
           <Animated.View style={[styles.pulseCircle, animatedStyle]}>
@@ -159,25 +165,48 @@ export default function HomeScreen() {
       </View>
 
       <Modal
-        visible={!!match}
+        visible={!!match || showNoMatchModal}
         transparent={true}
         animationType="slide"
-        onRequestClose={resetSearch}
+        onRequestClose={handleReset}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.resultContainer}>
-            <TouchableOpacity style={styles.closeButton} onPress={resetSearch}>
+            <TouchableOpacity style={styles.closeButton} onPress={handleReset}>
               <Ionicons name="close" size={24} color="#666" />
             </TouchableOpacity>
 
-            <ThemedText type="title" style={styles.foundTitle}>
-              Found: {match?.title}
-            </ThemedText>
-            <ThemedText style={styles.artistText}>by {match?.artist}</ThemedText>
-            
-            <TouchableOpacity style={styles.chordButton} onPress={handleOpenChords}>
-              <ThemedText style={styles.chordButtonText}>View Chord Chart (PDF)</ThemedText>
-            </TouchableOpacity>
+            {match ? (
+              <>
+                <ThemedText type="title" style={styles.foundTitle}>
+                  Found: {match.title}
+                </ThemedText>
+                <ThemedText style={styles.artistText}>by {match.artist}</ThemedText>
+                
+                {chordChartUrl ? (
+                  <TouchableOpacity style={styles.chordButton} onPress={handleOpenChords}>
+                    <ThemedText style={styles.chordButtonText}>View Chord Chart (PDF)</ThemedText>
+                  </TouchableOpacity>
+                ) : (
+                  <View style={styles.errorContainer}>
+                    <Ionicons name="alert-circle-outline" size={24} color="#FF9500" />
+                    <ThemedText style={styles.errorText}>
+                      Chord chart not available in the SJUC library.
+                    </ThemedText>
+                  </View>
+                )}
+              </>
+            ) : (
+              <>
+                <Ionicons name="search-outline" size={48} color="#666" style={{ marginBottom: 15 }} />
+                <ThemedText type="title" style={styles.foundTitle}>
+                  Song Not Found
+                </ThemedText>
+                <ThemedText style={styles.errorText}>
+                  I'm sorry, we didn't find that song in our library.
+                </ThemedText>
+              </>
+            )}
           </View>
         </View>
       </Modal>
@@ -335,6 +364,20 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 18,
     fontWeight: 'bold',
+  },
+  errorContainer: {
+    marginTop: 10,
+    alignItems: 'center',
+    padding: 15,
+    backgroundColor: 'rgba(255, 149, 0, 0.1)',
+    borderRadius: 12,
+    width: '100%',
+  },
+  errorText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 8,
   },
   pdfModalContainer: {
     flex: 1,
