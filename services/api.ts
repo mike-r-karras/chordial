@@ -1,5 +1,6 @@
 import * as FileSystem from 'expo-file-system';
 import { Platform } from 'react-native';
+import { AudioModule, createAudioPlayer } from 'expo-audio';
 
 export interface SongMatch {
   title: string;
@@ -7,26 +8,9 @@ export interface SongMatch {
   chordChartUrl: string;
 }
 
-// const FRAGMENTS_URL = 'https://chordial-api-616025745588.us-west1.run.app/fragments';
-const FRAGMENTS_URL = 'https://chordial-fingerprint-api-616025745588.us-west1.run.app/fragments';
-const AUTH_TOKEN = '5d3c8f8b6b9f4f0e9f8f3d8c7a1b2e4f6c9d0a8b7e3f1c2d4a5b6c7d8e9f0a1';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TEMPORARY MOCK — for testing the chord-chart feature while the backend is
-// down. To restore real backend calls, set USE_MOCK = false (or delete this
-// whole block plus the early-return below).
-//
-// To test different scenarios, change MOCK_MATCH.title:
-//   • A title that exists in sjuc_songs.json  → PDF viewer opens (happy path)
-//   • A title NOT in sjuc_songs.json          → "Chord chart not available" alert
-//   • Set MOCK_MATCH = null                   → "Song Not Found" alert
-// ─────────────────────────────────────────────────────────────────────────────
-const USE_MOCK = false;
-const MOCK_MATCH: SongMatch | null = {
-  title: 'Hey Jude',
-  artist: 'The Beatles',
-  chordChartUrl: '', // unused — URL is now sourced from sjuc_songs.json
-};
+const SHAZAM_API_URL = 'https://shazam.p.rapidapi.com/songs/v3/detect?timezone=America%2FLos_Angeles&locale=en-US';
+const RAPIDAPI_HOST = 'shazam.p.rapidapi.com';
+const RAPIDAPI_KEY = '24adfca940msh3c2c6476b9eb1f6p1d5acbjsn42c64728d190';
 
 async function cleanupAudio(uri: string) {
   if (Platform.OS === 'web') {
@@ -44,78 +28,218 @@ async function cleanupAudio(uri: string) {
   }
 }
 
-async function uploadAudio(uri: string): Promise<Response> {
-  const commonHeaders: HeadersInit = {
-    'Authorization': `Bearer ${AUTH_TOKEN}`,
-  };
-
-  if (Platform.OS === 'web') {
-    const originalBlob = await fetch(uri).then((r) => r.blob());
-    // Use the original blob's type for the Content-Type header
-    const contentType = originalBlob.type || 'audio/m4a'; 
-
-    return fetch(FRAGMENTS_URL, {
-      method: 'POST',
-      headers: {
-        ...commonHeaders,
-        'Content-Type': contentType,
-      },
-      body: originalBlob,
+/**
+ * Extracts PCM samples from any audio file by playing it silently and sampling the output.
+ * This is a workaround for Android where MediaRecorder doesn't support WAV/PCM directly.
+ */
+async function extractPCMFromPlayback(audioUri: string): Promise<Float32Array> {
+  return new Promise(async (resolve) => {
+    let player: any;
+    const source = { uri: audioUri };
+    let hasStarted = false;
+    
+    try {
+      player = createAudioPlayer(source, { updateInterval: 10 });
+    } catch (e) {
+      try {
+        player = new AudioModule.AudioPlayer(source, 10, false, 0);
+      } catch (e2) {
+        try {
+          player = new AudioModule.AudioPlayer(source as any, 10, false, 0);
+        } catch (e3) {
+          console.error('[API] Failed to create AudioPlayer:', e3);
+          resolve(new Float32Array(0));
+          return;
+        }
+      }
+    }
+    
+    try {
+      player.volume = 0.05; // Low volume for silent playback sampling
+      if (typeof player.setPlaybackRate === 'function') {
+        player.setPlaybackRate(1.0);
+      } else {
+        player.playbackRate = 1.0;
+      }
+    } catch (e) {
+      console.warn('[API] Player config error:', e);
+    }
+    
+    const allFrames: number[] = [];
+    
+    const subscription = player.addListener('audioSampleUpdate', (data: any) => {
+      if (data.channels.length > 0) {
+        allFrames.push(...data.channels[0].frames);
+      }
     });
-  }
 
-  const form = new FormData();
-  form.append('audio', {
-    uri,
-    name: 'capture.m4a',
-    type: 'audio/m4a',
-  } as any);
+    const statusSubscription = player.addListener('playbackStatusUpdate', (status: any) => {
+      if (status.isLoaded && !hasStarted) {
+        hasStarted = true;
+        player.setAudioSamplingEnabled(true);
+        player.play();
+      }
 
-  return fetch(FRAGMENTS_URL, {
-    method: 'POST',
-    headers: commonHeaders,
-    body: form,
+      if (status.didJustFinish) {
+        subscription.remove();
+        statusSubscription.remove();
+        player.remove();
+        console.log(`[API] PCM Extraction complete. Samples: ${allFrames.length}`);
+        resolve(new Float32Array(allFrames));
+      }
+    });
+
+    if (player.isLoaded && !hasStarted) {
+      hasStarted = true;
+      player.setAudioSamplingEnabled(true);
+      player.play();
+    }
+
+    // Extraction fallback timeout
+    setTimeout(() => {
+      if (allFrames.length === 0 || !hasStarted) {
+        subscription.remove();
+        statusSubscription.remove();
+        player.remove();
+        console.warn('[API] Extraction timeout');
+        resolve(new Float32Array(allFrames));
+      }
+    }, 10000);
   });
 }
 
-export async function identifySongFromAudio(uri: string): Promise<SongMatch | null> {
-  if (USE_MOCK) {
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    await cleanupAudio(uri);
-    return MOCK_MATCH;
-  }
+/**
+ * Resamples any audio blob on Web using standard Web Audio APIs.
+ */
+async function getPCMFromWebAudio(uri: string): Promise<Float32Array> {
+  const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+  const audioCtx = new AudioContextClass();
+  const response = await fetch(uri);
+  const arrayBuffer = await response.arrayBuffer();
+  const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
 
+  const targetSampleRate = 44100;
+  const OfflineAudioContextClass = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+  const offlineCtx = new OfflineAudioContextClass(
+    1, // mono
+    audioBuffer.duration * targetSampleRate,
+    targetSampleRate
+  );
+
+  const bufferSource = offlineCtx.createBufferSource();
+  bufferSource.buffer = audioBuffer;
+  bufferSource.connect(offlineCtx.destination);
+  bufferSource.start();
+
+  const renderedBuffer = await offlineCtx.startRendering();
+  return renderedBuffer.getChannelData(0); // Float32Array of 44100Hz mono samples
+}
+
+/**
+ * Converts Float32Array samples to signed 16-bit little-endian PCM bytes.
+ */
+function float32To16BitPCM(samples: Float32Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(samples.length * 2);
+  const view = new DataView(buffer);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    const val = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    view.setInt16(i * 2, val, true); // true = little-endian
+  }
+  return buffer;
+}
+
+/**
+ * High-performance, cross-platform Base64 encoder for ArrayBuffers.
+ */
+function bufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  if (Platform.OS === 'web') {
+    return window.btoa(binary);
+  } else {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    let base64 = '';
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i += 3) {
+      const b1 = bytes[i];
+      const b2 = i + 1 < len ? bytes[i + 1] : 0;
+      const b3 = i + 2 < len ? bytes[i + 2] : 0;
+      
+      const enc1 = b1 >> 2;
+      const enc2 = ((b1 & 3) << 4) | (b2 >> 4);
+      const enc3 = i + 1 < len ? ((b2 & 15) << 2) | (b3 >> 6) : 64;
+      const enc4 = i + 2 < len ? b3 & 63 : 64;
+      
+      base64 += chars.charAt(enc1) +
+                chars.charAt(enc2) +
+                (enc3 === 64 ? '=' : chars.charAt(enc3)) +
+                (enc4 === 64 ? '=' : chars.charAt(enc4));
+    }
+    return base64;
+  }
+}
+
+export async function identifySongFromAudio(uri: string): Promise<SongMatch | null> {
   try {
-    const response = await uploadAudio(uri);
+    console.log('[API] Extracting PCM samples from recording...');
+    let samples: Float32Array;
+
+    if (Platform.OS === 'web') {
+      samples = await getPCMFromWebAudio(uri);
+    } else {
+      samples = await extractPCMFromPlayback(uri);
+    }
+
+    if (samples.length === 0) {
+      console.warn('[API] Extracted PCM buffer is empty');
+      return null;
+    }
+
+    console.log(`[API] Extracted ${samples.length} float samples. Converting to 16-bit little-endian...`);
+    const pcmBuffer = float32To16BitPCM(samples);
+    
+    console.log(`[API] PCM buffer size: ${pcmBuffer.byteLength} bytes. Encoding to Base64...`);
+    const base64Audio = bufferToBase64(pcmBuffer);
+
+    console.log(`[API] Base64 string length: ${base64Audio.length} characters. Uploading to Shazam API...`);
+
+    const response = await fetch(SHAZAM_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain',
+        'x-rapidapi-host': RAPIDAPI_HOST,
+        'x-rapidapi-key': RAPIDAPI_KEY,
+      },
+      body: base64Audio,
+    });
 
     if (!response.ok) {
-      console.warn(`[API] /fragments returned ${response.status}`);
+      console.warn(`[API] Shazam API returned status ${response.status}: ${response.statusText}`);
       return null;
     }
 
     const result = await response.json();
-    console.log('[API] /fragments response:', result);
+    console.log('[API] Shazam API response:', result);
 
-    const results = result.results || [];
-    if (result.success && results.length > 0) {
-      // Pick highest confidence, or the first match if confidences are equal
-      const topResult = results.reduce((best: any, current: any) =>
-        current.confidence > best.confidence ? current : best
-      );
+    if (result && result.track) {
+      const track = result.track;
+      console.log(`[API] Match found: "${track.title}" by ${track.subtitle}`);
       
-      console.log('[API] topResult:', topResult);
-
       return {
-        title: topResult.song.name,
-        artist: topResult.song.artist,
-        // Priority: specific result URL -> top-level match URL -> empty
-        chordChartUrl: topResult.song.chordChartUrl || result.match?.chordChartUrl || '',
+        title: track.title || 'Unknown Title',
+        artist: track.subtitle || 'Unknown Artist',
+        chordChartUrl: '', // Fall back to local uketunes.firebasestorage.app via index.tsx
       };
     }
 
+    console.log('[API] No match found');
     return null;
   } catch (e) {
-    console.error('[API] /fragments request failed:', e);
+    console.error('[API] Shazam identification failed:', e);
     return null;
   } finally {
     await cleanupAudio(uri);

@@ -87,7 +87,7 @@ export function useAudioProcessor() {
       isTransitioningRef.current = false;
 
       return new Promise<boolean>((resolve) => {
-        // Record for 10 seconds to get enough data for a good fingerprint
+        // Record for 4 seconds (3-5 seconds is ideal for detection and stays under 500KB)
         setTimeout(async () => {
           try {
             console.log('[Processor] Capturing audio for analysis...');
@@ -118,7 +118,7 @@ export function useAudioProcessor() {
           } finally {
             // No explicit cleanup needed for recorder as useAudioRecorder handles it
           }
-        }, 10000);
+        }, 4000);
       });
 
     } catch (err) {
