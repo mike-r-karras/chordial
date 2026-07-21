@@ -178,6 +178,13 @@ export default function HomeScreen() {
 
             {match ? (
               <>
+                {match.coverArt ? (
+                  <Image
+                    source={{ uri: match.coverArt }}
+                    style={styles.coverThumbnail}
+                    contentFit="cover"
+                  />
+                ) : null}
                 <ThemedText type="title" style={styles.foundTitle}>
                   Found: {match.title}
                 </ThemedText>
@@ -200,10 +207,10 @@ export default function HomeScreen() {
               <>
                 <Ionicons name="search-outline" size={48} color="#666" style={{ marginBottom: 15 }} />
                 <ThemedText type="title" style={styles.foundTitle}>
-                  Song Not Found
+                  Song Not Recognized
                 </ThemedText>
                 <ThemedText style={styles.errorText}>
-                  I'm sorry, we didn't find that song in our library.
+                  Song not recognized.
                 </ThemedText>
               </>
             )}
@@ -337,6 +344,13 @@ const styles = StyleSheet.create({
     right: 20,
     top: 20,
     padding: 5,
+  },
+  coverThumbnail: {
+    width: 120,
+    height: 120,
+    borderRadius: 12,
+    marginTop: 10,
+    marginBottom: 10,
   },
   foundTitle: {
     marginTop: 20,

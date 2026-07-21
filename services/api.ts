@@ -6,6 +6,7 @@ export interface SongMatch {
   title: string;
   artist: string;
   chordChartUrl: string;
+  coverArt?: string;
 }
 
 const SHAZAM_API_URL = 'https://shazam.p.rapidapi.com/songs/v3/detect?timezone=America%2FLos_Angeles&locale=en-US';
@@ -225,15 +226,23 @@ export async function identifySongFromAudio(uri: string): Promise<SongMatch | nu
     const result = await response.json();
     console.log('[API] Shazam API response:', result);
 
-    if (result && result.track) {
-      const track = result.track;
-      console.log(`[API] Match found: "${track.title}" by ${track.subtitle}`);
-      
-      return {
-        title: track.title || 'Unknown Title',
-        artist: track.subtitle || 'Unknown Artist',
-        chordChartUrl: '', // Fall back to local uketunes.firebasestorage.app via index.tsx
-      };
+    if (result && result.results && result.results.matches && result.results.matches.length > 0) {
+      const firstMatch = result.results.matches[0];
+      const matchType = firstMatch.type;
+      const matchId = firstMatch.id;
+      const songDetails = result.resources?.[matchType]?.[matchId];
+
+      if (songDetails && songDetails.attributes) {
+        const track = songDetails.attributes;
+        console.log(`[API] Match found: "${track.title}" by ${track.artist}`);
+        
+        return {
+          title: track.title || 'Unknown Title',
+          artist: track.artist || 'Unknown Artist',
+          coverArt: track.images?.coverArt || '',
+          chordChartUrl: '', // Fall back to local uketunes.firebasestorage.app via index.tsx
+        };
+      }
     }
 
     console.log('[API] No match found');
